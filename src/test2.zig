@@ -198,4 +198,57 @@ test "if optional payload capture" {
     try expect(b.? == 6);
 }
 
+fn fibonacci(n: u32) u32 {
+    if (0 == n or 1 == n) return n;
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
 
+test "comptime blocks" {
+    var x = comptime fibonacci(10);
+    _ = x;
+
+    var y = comptime blk: {
+        break :blk fibonacci(10);
+    };
+    _ = y;
+}
+
+test "comptime_int" {
+    const a = 12;
+    const b = a + 10;
+
+    const c: u4 = a;
+    _ = c;
+    const d: f32 = b;
+    _ = d;
+}
+
+test "branching on types" {
+    const a = 5;
+    const b: if (a < 10) f32 else i32 = 5;
+    _ = b;
+}
+
+test "branching on types" {
+    const a = 5;
+    const b: if (a < 10) f32 else i32 = 5;
+    _ = b;
+}
+
+fn Matrix(
+    comptime T: type,
+    comptime width: comptime_int,
+    comptime height: comptime_int,
+) type {
+    return [height][width]T;
+}
+
+test "returning a type" {
+    const matType = Matrix(f32, 2, 2);
+    try expect(matType == [2][2]f32);
+    // const grid = matType{[2]f32{0, 1},[2]f32{2, 3}};
+    // try expect(grid[0][0] == 0);
+    // try expect(grid[0][1] == 1);
+    // try expect(grid[1][0] == 2);
+    // try expect(grid[1][1] == 3);
+}
