@@ -198,4 +198,25 @@ test "if optional payload capture" {
     try expect(b.? == 6);
 }
 
+var numbers_left: u32 = 4;
+fn eventuallyNullSequence() ?u32 {
+    if (numbers_left == 0) return null;
+    numbers_left -= 1;
+    return numbers_left;
+}
 
+test "while null capture" {
+    var sum: u32 = 0;
+    while (eventuallyNullSequence()) |value| {
+        sum += value;
+    }
+    try expect(sum == 6); // 3 + 2 + 1
+}
+
+// optional pointer and optional slice types don't take up extra memory
+// internally they use the 0 value of the pointer for null
+// this is how null pointers work in zig - they ust be unwrapped to a non-optional
+// before dereferencing, which stops null poitner deref from happening accidentally.
+
+// comptime
+//
