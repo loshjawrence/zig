@@ -473,9 +473,302 @@ fn GetBiggerInt(comptime T: type) type {
             .bits = @typeInfo(T).Int.bits + 1,
             .signedness = @typeInfo(T).Int.signedness,
         },
-
     });
-
-
 }
 
+test "@Type" {
+    try expect(GetBiggerInt(u8) == u9);
+    try expect(GetBiggerInt(i31) == i32);
+}
+
+// Returning a struct type is how you make a generic in zig. usage of @This is required which gets the type of the inner most struct, union or enum.GetBiggerInt
+// here std.mem.eql is also used which compares two slices
+fn Vec(
+    comptime T: type,
+    comptime count: comptime_int,
+) type {
+    return struct {
+        data: [count]T,
+        const Self = @This();
+
+        fn abs(self: Self) Self {
+            var temp = Self{ .data = undefined };
+            for (self.data) |elem, i| {
+                temp.data[i] = if (elem < 0)
+                    -elem
+                else
+                    elem;
+            }
+            return temp;
+        }
+
+        fn init(data: [count]T) Self {
+            return Self{ .data = data };
+        }
+    };
+}
+
+const eql = @import("std").mem.eql;
+
+test "generic vector" {
+    const x = Vec(f32, 3).init([_]f32{ 10, -10, 5 });
+    const y = x.abs();
+    try expect(eql(f32, &y.data, &[_]f32{ 10, 10, 5 }));
+}
+
+// The types of function params can also be inferred by using anytype in place of a type. @TypeOf can then be used on teh param
+fn plusOne(x: anytype) @TypeOf(x) {
+    return x + 1;
+}
+
+test "inferred function param" {
+    try expect(plusOne(@as(u32, 1)) == 2);
+}
+
+// comptime also introdduces th eoperators ++ and ** for concat and repeating arrays and slices. these ops do not work at runtime
+test "++" {
+    const x: [4]u8 = undefined;
+    const y = x[0..];
+
+    const a: [6]u8 = undefined;
+    const b = a[0..];
+
+    const new = y ++ b;
+
+    try expect(new.len == 10);
+}
+
+test "**" {
+    const pattern = [_]u8{ 0xCC, 0xAA };
+    const memory = pattern ** 3;
+    try expect(eql(u8, &memory, &[_]u8{ 0xCc, 0xAa, 0xCC, 0xAA, 0xCC, 0xAA }));
+}
+// payload captures use |value|. captured values are immutable but you can use |*value|
+// to change the underlying value
+test "optional-if" {
+    var maybe_num: ?usize = 10;
+
+    if (maybe_num) |n| {
+        try expect(@TypeOf(n) == usize);
+        try expect(n == 10);
+    } else {
+        unreachable;
+    }
+}
+
+test "while optional" {
+    var i: ?u32 = 10;
+    while (i) |num| : (i.? -= 1) {
+        try expect(@TypeOf(num) == u32);
+        if (num == 1) {
+            i = null;
+            break;
+        }
+    }
+    try expect(i == null);
+}
+
+// var numbers_left2: u32 = undefined;
+// fn eventuallyErrorSequence() !u32 {
+//     return if (numbers_left2 == 0) error.ReachedZero else blk: {
+//         numbers_left2 -= 1;
+//         break :blk numbers_left2;
+//     };
+// }
+// test "while error union capture" {
+//     var sum: u32 = 0;
+//     numbers_left2 = 3;
+//     while (eventuallyErrorSequence()) |value| {
+//         sum += value;
+//     } else |err| {
+//         try expect(err == error.ReachedZero);
+//     }
+// }
+
+test "for capture" {
+    const x = [_]i8{ 1, 5, 120, -5 };
+    for (x) |v| try expect(@TypeOf(v) == i8);
+}
+
+const Info = union(enum) {
+    a: u32,
+    b: []const u8,
+    c,
+    d: u32,
+};
+
+test "switch capture" {
+    var b = Info{ .a = 10 };
+    const x = switch (b) {
+        .b => |str| blk: {
+            try expect(@TypeOf(str) == []const u8);
+            break :blk 1;
+        },
+        .c => 2,
+        //if these are of the same type, they
+        //may be inside the same capture group
+        .a, .d => |num| blk: {
+            try expect(@TypeOf(num) == u32);
+            break :blk num * 2;
+        },
+    };
+    try expect(x == 20);
+}
+
+test "for with pointer capture" {
+    var data = [_]u8{ 1, 2, 3 };
+    for (data) |*byte| byte.* += 1;
+    try expect(eql(u8, &data, &[_]u8{ 2, 3, 4 }));
+}
+
+// opaque
+
+// anonymouse structs
+// The struct type may be omitted from a struct literal. These literals may coerce to other struct types.
+test "anonymous struct literal" {
+    const Point = struct { x: i32, y: i32 };
+
+    var pt: Point = .{
+        .x = 13,
+        .y = 67,
+    };
+    try expect(pt.x == 13);
+    try expect(pt.y == 67);
+}
+//Anonymous structs may be completely anonymous i.e. without being coerced to another struct type.
+test "fully anonymous struct" {
+    try dump(.{
+        .int = @as(u32, 1234),
+        .float = @as(f64, 12.34),
+        .b = true,
+        .s = "hi",
+    });
+}
+
+fn dump(args: anytype) !void {
+    try expect(args.int == 1234);
+    try expect(args.float == 12.34);
+    try expect(args.b);
+    try expect(args.s[0] == 'h');
+    try expect(args.s[1] == 'i');
+}
+
+// Anonymous structs without field names may be created, and are referred to as tuples.
+// These have many of the properties that arrays do; tuples can be iterated over, indexed, can be used with the ++ and ** operators, and have a len field.
+// Internally, these have numbered field names starting at "0", which may be accessed with the special syntax @"0" which acts as an escape for the syntax - things inside @"" are always recognised as identifiers.
+// An inline loop must be used to iterate over the tuple here, as the type of each tuple field may differ.
+test "tuple" {
+    const values = .{
+        @as(u32, 1234),
+        @as(f64, 12.34),
+        true,
+        "hi",
+    } ++ .{false} ** 2;
+    try expect(values[0] == 1234);
+    try expect(values[4] == false);
+    inline for (values) |v, i| {
+        if (i != 2) continue;
+        try expect(v);
+    }
+    try expect(values.len == 6);
+    try expect(values.@"3"[0] == 'h');
+}
+
+// Arrays, slices and many pointers may be terminated by a value of their child type.
+// This is known as sentinel termination.
+// These follow the syntax [N:t]T, [:t]T, and [*:t]T, where t is a value of the child type T.
+// An example of a sentinel terminated array.
+// The built-in @bitCast is used to perform an unsafe bitwise type conversion.
+// This shows us that the last element of the array is followed by a 0 byte.
+test "sentinel termination" {
+    // :0 means that 0 is implicitly added to the end of the array but is not included in the length
+    // similiar to char* strings in C where it ends with '\0' but that char is not included in the size
+    const terminated = [3:0]u8{ 3, 2, 1 };
+    try expect(terminated.len == 3);
+    // try expect(@bitCast([4]u8, terminated)[3] == 0);
+}
+
+// The types of string literals is *const [N:0]u8, where N is the length of the string. This allows string literals to coerce to sentinel terminated slices, and sentinel terminated many pointers. Note: string literals are UTF-8 encoded.
+test "string literal" {
+    try expect(@TypeOf("hello") == *const [5:0]u8);
+}
+
+// [*:0]u8 and [*:0]const u8 perfectly model C’s strings.
+test "C string" {
+    const c_string: [*:0]const u8 = "hello";
+    var array: [5]u8 = undefined;
+
+    var i: usize = 0;
+    while (c_string[i] != 0) : (i += 1) {
+        array[i] = c_string[i];
+    }
+}
+
+// Sentinel terminated types coerce to their non-sentinel-terminated counterparts.
+test "coercion" {
+    var a: [*:0]u8 = undefined;
+    const b: [*]u8 = a;
+    _ = b;
+
+    var c: [5:0]u8 = undefined;
+    const d: [5]u8 = c;
+    _ = d;
+
+    var e: [:10]f32 = undefined;
+    const f = e;
+    _ = f;
+}
+
+// Sentinel terminated slicing is provided which can be used to create a sentinel terminated slice with the syntax x[n..m:t], where t is the terminator value.
+// Doing this is an assertion from the programmer that the memory is terminated where it should be - getting this wrong is detectable illegal behaviour.
+test "sentinel terminated slicing" {
+    var x = [_:0]u8{255} ** 3;
+    const y = x[0..3 :0];
+    _ = y;
+}
+
+// Vectors
+// Zig provides vector types for SIMD.
+// It is worth noting that Vector explicitly may result in slower software if you do not make the right decisions. The compiler’s auto-vectorisation is fairly smart as-is.
+// These are not to be conflated with vectors in a mathematical sense, or vectors like C++’s std::vector (for this, see “Arraylist” in chapter 2).
+// Vectors may be created using the @Type built-in we used earlier, and std.meta.Vector provides a shorthand for this.
+// Vectors can only have child types of booleans, integers, floats and pointers.
+// Operations between vectors with the same child type and length can take place.
+// These operations are performed on each of the values in the vector.std.meta.eql is used here to check for equality between two vectors (also useful for other types like structs).
+const meta = @import("std").meta;
+const Vector = meta.Vector;
+test "vector add" {
+    const x: Vector(4, f32) = .{ 1, -10, 20, -1 };
+    const y: Vector(4, f32) = .{ 2, 10, 0, 1 };
+    const z = x + y;
+    try expect(meta.eql(z, Vector(4, f32){ 3, 0, 20, 0 }));
+}
+
+// Vectors are indexable.
+test "vector indexing" {
+    const x: Vector(4, u8) = .{ 255, 0, 255, 0 };
+    try expect(x[0] == 255);
+}
+
+// The built-in function @splat may be used to construct a vector where all of the values are the same. Here we use it to multiply a vector by a scalar.
+test "vector * scalar" {
+    const x: Vector(3, f32) = .{ 12.5, 37.5, 2.5 };
+    const y = x * @splat(3, @as(f32, 2));
+    try expect(meta.eql(y, Vector(3, f32){ 25, 75, 5 }));
+}
+
+// Vectors do not have a len field like arrays, but may still be looped over. Here, std.mem.len is used as a shortcut for @typeInfo(@TypeOf(x)).Vector.len.
+const len = @import("std").mem.len;
+test "vector looping" {
+    const x = Vector(4, u8){ 255, 0, 255, 0 };
+    var sum = blk: {
+        var tmp: u10 = 0;
+        var i: u8 = 0;
+        while (i < len(x)) : (i += 1) tmp += x[i];
+        break :blk tmp;
+    };
+    try expect(sum == 510);
+}
+
+// Vectors coerce to their respective arrays.
+// const arr: [4]f32 = @Vector(4, f32){ 1, 2, 3, 4 };
